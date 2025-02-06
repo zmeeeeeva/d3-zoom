@@ -11,7 +11,7 @@ import noevent, {nopropagation} from "./noevent.js";
 // Ignore right-click, since that should open the context menu.
 // except for pinch-to-zoom, which is sent as a wheel+ctrlKey event
 function defaultFilter(event) {
-  return (!event.ctrlKey || event.type === 'wheel') && !event.button;
+  return (!event.ctrlKey || event.type === "wheel") && !event.button;
 }
 
 function defaultExtent() {
@@ -69,6 +69,57 @@ export default function() {
       clickDistance2 = 0,
       tapDistance = 10,
       momentum = false;
+
+  var isDown;
+
+  var startX,
+      startY;
+
+  var velocityX = 0,
+      velocityY = 0;
+
+  var velocityDecay = 0.75;
+  var velocityLimit = 0.5;
+
+  var momentumID;
+  var translation;
+
+  function beginMomentumTracking(g) {
+    cancelMomentumTracking();
+    momentumID = requestAnimationFrame(() => momentumLoop(g));
+  }
+
+  function cancelMomentumTracking() {
+    cancelAnimationFrame(momentumID);
+  }
+
+  function momentumLoop(g) {
+    velocityX *= velocityDecay;
+    velocityY *= velocityDecay;
+
+    if (translation) {
+      translation.x += velocityX;
+      translation.y += velocityY;
+
+      g.zoom("mouse", constrain(translation, g.extent, translateExtent));
+    }
+
+    if (Math.abs(velocityX) > velocityLimit || Math.abs(velocityY) > velocityLimit) {
+      momentumID = requestAnimationFrame(() => momentumLoop(g));
+    }
+  }
+
+  function setStart(event) {
+    isDown = true;
+    startX = event.clientX;
+    startY = event.clientY;
+  }
+
+  function setVelocity(event) {
+    if (!isDown) return;
+    velocityX = event.clientX - startX;
+    velocityY = event.clientY - startY;
+  }
 
   function zoom(selection) {
     selection
@@ -271,16 +322,6 @@ export default function() {
   function mousedowned(event, ...args) {
     if (touchending || !filter.apply(this, arguments)) return;
 
-    var isDown;
-    var startX, startY;
-    var velocityX = 0, velocityY = 0;
-    var velocityDecay = 0.75;
-    var velocityLimit = 0.5;
-    var momentumID;
-    var translation;
-
-    isDown = true;
-
     var currentTarget = event.currentTarget,
         g = gesture(this, args, true).event(event),
         v = select(event.view).on("mousemove.zoom", mousemoved, true).on("mouseup.zoom", mouseupped, true),
@@ -294,36 +335,8 @@ export default function() {
     interrupt(this);
     g.start();
 
-    startX = x0;
-    startY = y0;
-
-   cancelMomentumTracking();
-
-    function beginMomentumTracking() {
-      cancelMomentumTracking();
-      momentumID = requestAnimationFrame(momentumLoop);
-    }
-
-    function cancelMomentumTracking() {
-      cancelAnimationFrame(momentumID);
-    }
-
-    function momentumLoop() {
-      velocityX *= velocityDecay;
-      velocityY *= velocityDecay;
-
-      if (translation) {
-        translation.x += velocityX;
-        translation.y += velocityY;
-
-        g.event(event)
-          .zoom("mouse", constrain(translation, g.extent, translateExtent));
-      }
-
-      if (Math.abs(velocityX) > velocityLimit || Math.abs(velocityY) > velocityLimit) {
-        momentumID = requestAnimationFrame(momentumLoop);
-      }
-    }
+    setStart(event);
+    cancelMomentumTracking();
 
     function mousemoved(event) {
       noevent(event);
@@ -333,25 +346,17 @@ export default function() {
       }
 
       translation = translate(g.that.__zoom, g.mouse[0] = pointer(event, currentTarget), g.mouse[1]);
-
-      g.event(event)
-        .zoom("mouse", constrain(translation, g.extent, translateExtent));
-
-      if (momentum) {
-        if (!isDown) return;
-        velocityX = event.clientX - startX;
-        velocityY = event.clientY - startY;
-      }
+      g.event(event).zoom("mouse", constrain(translation, g.extent, translateExtent));
+      momentum && setVelocity(event);
     }
 
     function mouseupped(event) {
       v.on("mousemove.zoom mouseup.zoom", null);
-      isDown = false;
       dragEnable(event.view, g.moved);
       noevent(event);
       g.event(event).end();
-
-      momentum && beginMomentumTracking();
+      isDown = false;
+      momentum && beginMomentumTracking(g);
     }
   }
 
@@ -385,8 +390,13 @@ export default function() {
 
     if (touchstarting) touchstarting = clearTimeout(touchstarting);
 
+    setStart(t);
+    cancelMomentumTracking();
+
     if (started) {
-      if (g.taps < 2) touchfirst = p[0], touchstarting = setTimeout(function() { touchstarting = null; }, touchDelay);
+      if (g.taps < 2) touchfirst = p[0], touchstarting = setTimeout(function() {
+        touchstarting = null;
+      }, touchDelay);
       interrupt(this);
       g.start();
     }
@@ -404,20 +414,22 @@ export default function() {
       if (g.touch0 && g.touch0[2] === t.identifier) g.touch0[0] = p;
       else if (g.touch1 && g.touch1[2] === t.identifier) g.touch1[0] = p;
     }
-    t = g.that.__zoom;
+
+    var z = g.that.__zoom;
     if (g.touch1) {
       var p0 = g.touch0[0], l0 = g.touch0[1],
           p1 = g.touch1[0], l1 = g.touch1[1],
           dp = (dp = p1[0] - p0[0]) * dp + (dp = p1[1] - p0[1]) * dp,
           dl = (dl = l1[0] - l0[0]) * dl + (dl = l1[1] - l0[1]) * dl;
-      t = scale(t, Math.sqrt(dp / dl));
+      z = scale(z, Math.sqrt(dp / dl));
       p = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2];
       l = [(l0[0] + l1[0]) / 2, (l0[1] + l1[1]) / 2];
-    }
-    else if (g.touch0) p = g.touch0[0], l = g.touch0[1];
+    } else if (g.touch0) p = g.touch0[0], l = g.touch0[1];
     else return;
 
-    g.zoom("touch", constrain(translate(t, p, l), g.extent, translateExtent));
+    translation = translate(z, p, l);
+    g.zoom("touch", constrain(translation, g.extent, translateExtent));
+    momentum && setVelocity(t);
   }
 
   function touchended(event, ...args) {
@@ -428,7 +440,9 @@ export default function() {
 
     nopropagation(event);
     if (touchending) clearTimeout(touchending);
-    touchending = setTimeout(function() { touchending = null; }, touchDelay);
+    touchending = setTimeout(function() {
+      touchending = null;
+    }, touchDelay);
     for (i = 0; i < n; ++i) {
       t = touches[i];
       if (g.touch0 && g.touch0[2] === t.identifier) delete g.touch0;
@@ -447,6 +461,9 @@ export default function() {
         }
       }
     }
+
+    isDown = false;
+    momentum && beginMomentumTracking(g);
   }
 
   zoom.wheelDelta = function(_) {

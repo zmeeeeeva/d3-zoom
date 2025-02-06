@@ -67,7 +67,8 @@ export default function() {
       touchDelay = 500,
       wheelDelay = 150,
       clickDistance2 = 0,
-      tapDistance = 10;
+      tapDistance = 10,
+      momentum = false;
 
   function zoom(selection) {
     selection
@@ -269,6 +270,17 @@ export default function() {
 
   function mousedowned(event, ...args) {
     if (touchending || !filter.apply(this, arguments)) return;
+
+    var isDown;
+    var startX, startY;
+    var velocityX = 0, velocityY = 0;
+    var velocityDecay = 0.75;
+    var velocityLimit = 0.5;
+    var momentumID;
+    var translation;
+
+    isDown = true;
+
     var currentTarget = event.currentTarget,
         g = gesture(this, args, true).event(event),
         v = select(event.view).on("mousemove.zoom", mousemoved, true).on("mouseup.zoom", mouseupped, true),
@@ -282,21 +294,64 @@ export default function() {
     interrupt(this);
     g.start();
 
+    startX = x0;
+    startY = y0;
+
+   cancelMomentumTracking();
+
+    function beginMomentumTracking() {
+      cancelMomentumTracking();
+      momentumID = requestAnimationFrame(momentumLoop);
+    }
+
+    function cancelMomentumTracking() {
+      cancelAnimationFrame(momentumID);
+    }
+
+    function momentumLoop() {
+      velocityX *= velocityDecay;
+      velocityY *= velocityDecay;
+
+      if (translation) {
+        translation.x += velocityX;
+        translation.y += velocityY;
+
+        g.event(event)
+          .zoom("mouse", constrain(translation, g.extent, translateExtent));
+      }
+
+      if (Math.abs(velocityX) > velocityLimit || Math.abs(velocityY) > velocityLimit) {
+        momentumID = requestAnimationFrame(momentumLoop);
+      }
+    }
+
     function mousemoved(event) {
       noevent(event);
       if (!g.moved) {
         var dx = event.clientX - x0, dy = event.clientY - y0;
         g.moved = dx * dx + dy * dy > clickDistance2;
       }
+
+      translation = translate(g.that.__zoom, g.mouse[0] = pointer(event, currentTarget), g.mouse[1]);
+
       g.event(event)
-       .zoom("mouse", constrain(translate(g.that.__zoom, g.mouse[0] = pointer(event, currentTarget), g.mouse[1]), g.extent, translateExtent));
+        .zoom("mouse", constrain(translation, g.extent, translateExtent));
+
+      if (momentum) {
+        if (!isDown) return;
+        velocityX = event.clientX - startX;
+        velocityY = event.clientY - startY;
+      }
     }
 
     function mouseupped(event) {
       v.on("mousemove.zoom mouseup.zoom", null);
+      isDown = false;
       dragEnable(event.view, g.moved);
       noevent(event);
       g.event(event).end();
+
+      momentum && beginMomentumTracking();
     }
   }
 
@@ -387,7 +442,7 @@ export default function() {
       if (g.taps === 2) {
         t = pointer(t, this);
         if (Math.hypot(touchfirst[0] - t[0], touchfirst[1] - t[1]) < tapDistance) {
-          var p = select(this).on("dblclick.zoom");
+          var p = select(this).on('dblclick.zoom');
           if (p) p.apply(this, arguments);
         }
       }
@@ -404,6 +459,10 @@ export default function() {
 
   zoom.touchable = function(_) {
     return arguments.length ? (touchable = typeof _ === "function" ? _ : constant(!!_), zoom) : touchable;
+  };
+
+  zoom.momentum = function(_) {
+    return arguments.length ? (momentum = _, zoom) : momentum;
   };
 
   zoom.extent = function(_) {
